@@ -84,6 +84,7 @@ option(USE_SSE4 "Set on/off" ON)
 #   find dependencies
 # ------------------------------------------------------
 
+set(OpenCV_DIR /home/decamargo/opencv/build/CMakeFiles/Export/lib/cmake/opencv4)
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
@@ -314,7 +315,10 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
 # ------------------------------------------------------
 
 if(BUILD_UTILS)
+    add_subdirectory(/home/decamargo/Documents/FBoW/extern/pybind11)
     add_subdirectory(utils)
+    pybind11_add_module(fbow_pybind /home/decamargo/Documents/FBoW/utils/pybind.cpp)
+    target_link_libraries(fbow_pybind PUBLIC fbow)
 endif()
 
 if(BUILD_TESTS)

@@ -62,10 +62,10 @@ std::vector<cv::Mat> readFeaturesFromFile(const std::string& filename, std::stri
 int main(int argc, char** argv) {
     try {
         CmdLineParser cml(argc, argv);
-        if (cml["-h"] || argc < 3) {
-            std::cerr << "Usage: FEATURE_INPUT OUTPUT_VOCABULARY [-k K] [-l L] [-t NUM_THREADS] [--max-iters NUM_ITER] [-v]" << std::endl;
+        if (cml["-h"] || argc < 5) {
+            std::cerr << "Usage: FEATURE_INPUT OUTPUT_VOCABULARY [-k K] [-l L] [-weight WEIGHT] [-norm NORM] [-distance DIST] [-t NUM_THREADS] [--max-iters NUM_ITER] [-v]" << std::endl;
             std::cerr << std::endl;
-            std::cerr << "Second step is creating the vocabulary of K^L from the set of features." << std::endl;
+            std::cerr << "Second step is creating the vocabulary of K^L from the set of features using the weighting WEIGHT, normalization NORM and distance algorithm DIST." << std::endl;
             std::cerr << "By default, we employ a random selection center without running a single iteration of the k means." << std::endl;
             std::cerr << "As indicated by the authors of the FLANN library in their paper, the result is not very different from using k-means, but speed is much better." << std::endl;
             std::cerr << std::endl;
@@ -80,6 +80,8 @@ int main(int argc, char** argv) {
         fbow::VocabularyCreator::Params params;
         params.k = stoi(cml("-k", "10"));
         params.L = stoi(cml("-l", "6"));
+        params.dist = stoi(cml("-distance", "0"));
+        int weight = stoi(cml("-weight", "1")); // weight=1 -> binary | weight=2 -> tf | weight=3 -> idf | weight=4 -> tfidf
         params.nthreads = stoi(cml("-t", "4"));
         params.maxIters = std::stoi(cml("--max-iters", "0"));
         params.verbose = cml["-v"];
@@ -87,11 +89,15 @@ int main(int argc, char** argv) {
         srand(0);
         fbow::VocabularyCreator vocab_creator;
         fbow::Vocabulary vocab;
+        bool use_idf = false;
+        if(weight==3 || weight==4){
+            use_idf=true;
+        }
 
         std::cout << "creating a " << params.k << "^" << params.L << " vocabulary ..." << std::endl;
 
         auto t_start = std::chrono::high_resolution_clock::now();
-        vocab_creator.create(vocab, features, desc_name, params);
+        vocab_creator.create(vocab, features, desc_name, params, use_idf);
         auto t_end = std::chrono::high_resolution_clock::now();
 
         std::cout << "time: " << (double)(std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count()) << "ms" << std::endl;
@@ -99,6 +105,7 @@ int main(int argc, char** argv) {
         std::cout << "saving the vocabulary: " << argv[2] << std::endl;
 
         vocab.saveToFile(argv[2]);
+        std::cout << "DONE SAVING" << argv[2] << std::endl;
     } catch (std::exception& ex) {
         std::cerr << ex.what() << std::endl;
     }

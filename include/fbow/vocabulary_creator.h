@@ -53,6 +53,7 @@ public:
         }
         uint32_t k=32;
         int L=-1;
+        int dist = 0; //dist=0 -> hamming | dist=1 -> jaccard
         uint32_t nthreads=1;
         int maxIters=11;
         bool verbose=false;
@@ -64,8 +65,8 @@ public:
     //k braching factor
     //L maximum tree depth
 
-    void create(fbow::Vocabulary &Voc, const std::vector<cv::Mat> &features, const std::string &desc_name, Params params);
-    void create(fbow::Vocabulary &Voc, const cv::Mat &features, const std::string &desc_name, Params params);
+    void create(fbow::Vocabulary &Voc, const std::vector<cv::Mat> &features, const std::string &desc_name, Params params, bool use_idf=false);
+    void create(fbow::Vocabulary &Voc, const cv::Mat &features, const std::string &desc_name, Params params, bool use_idf=false);
 private:
     Params _params;
     struct feature_info{
@@ -271,7 +272,7 @@ private:
 
 
     //------------
-    void convertIntoVoc(Vocabulary &Voc, std::string dec_name);
+    void convertIntoVoc(Vocabulary &Voc, std::string dec_name, const std::vector<cv::Mat> &features, bool use_idf=false);
 
 
     /**
@@ -282,6 +283,7 @@ private:
        */
     static float distance_float_generic(const cv::Mat &a, const cv::Mat &b);
     static float distance_hamming_generic(const cv::Mat &a, const cv::Mat &b);
+    static float distance_jaccard_generic(const cv::Mat &a, const cv::Mat &b);
     static float distance_hamming_32bytes(const cv::Mat &a, const cv::Mat &b);
     std::function<float(const cv::Mat &a, const cv::Mat &b)> dist_func;
     static inline uint64_t uint64_popcnt(uint64_t v) {

@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include <opencv2/core/core.hpp>
 #include <map>
 #include <memory>
+#include <math.h>
 #include <bitset>
 #if !defined(__ANDROID__) && !defined(__arm64__) && !defined(__aarch64__)
 #include <immintrin.h>
@@ -52,7 +53,8 @@ public:
     ~Vocabulary();
 
     //transform the features stored as rows in the returned BagOfWords
-    BoWVector transform(const cv::Mat& features);
+    BoWVector transform(const cv::Mat& features, int norm=2, bool use_idf=false);
+    std::map<int, bool> transformIDF(const cv::Mat& features);
     void transform(const cv::Mat& features, int level, BoWVector& result, BoWFeatVector& result2);
 
     //loads/saves from a file
@@ -89,7 +91,7 @@ private:
         uint64_t _child_off_start = 0;        //within a block,where the children offset part starts
         uint64_t _total_size = 0;
         int32_t _desc_type = 0, _desc_size = 0; //original descriptor types and sizes (without padding)
-        uint32_t _m_k = 0;                      //number of children per node
+        uint32_t _m_k = 0;                      //number of children per node              
     };
     params _params;
     char* _data = nullptr; //pointer to data
@@ -170,13 +172,15 @@ private:
     std::shared_ptr<cpu> cpu_info;
 
     template<typename Computer>
-    BoWVector _transform(const cv::Mat& features) {
+    BoWVector _transform(const cv::Mat& features, bool use_tf) {
         Computer comp;
         comp.setParams(_params._desc_size, _params._desc_size_bytes_wp);
         using DType = typename Computer::DType; //distance type
         using TData = typename Computer::TData; //data type
+        std::map<int, int> number_of_occurances;
 
         BoWVector result;
+        int total_words=0;
         std::pair<DType, uint32_t> best_dist_idx(std::numeric_limits<uint32_t>::max(), 0); //minimum distance found
         block_node_info* bn_info;
         for (int cur_feature = 0; cur_feature < features.rows; cur_feature++) {
@@ -196,13 +200,65 @@ private:
                 //if the node is leaf get word id and weight,else go to its children
                 if (bn_info->isleaf()) { //if the node is leaf get word id and weight
                     result[bn_info->getId()] += bn_info->weight;
+                    if(number_of_occurances.count(bn_info->getId())){
+                        number_of_occurances[bn_info->getId()]+=1;
+                    }else{
+                        number_of_occurances[bn_info->getId()]=1;
+                    }
+                    total_words++;
                 }
                 else
                     setBlock(bn_info->getId(), c_block); //go to its children
             } while (!bn_info->isleaf() && bn_info->getId() != 0);
         }
+        // we iterate through all elements of the map and calculate their individual TFs. The TF gets then multiplied to the values of the BoW
+        // we have to keep in mind that the BoW is based on weights which can be the IDF. 
+        if(use_tf){
+            for( auto e : number_of_occurances){
+                float tf = (float)e.second/(float)total_words;
+                float bow_value = result[e.first] * tf;
+                result[e.first] = bow_value;
+            }
+        }
         return result;
     }
+    template<typename Computer>
+    // this function is only used to calculate the IDF to get meaningful weights for a newly generated vocabulary
+    std::map<int, bool> _transformIDF(const cv::Mat& features) {
+        Computer comp;
+        comp.setParams(_params._desc_size, _params._desc_size_bytes_wp);
+        using DType = typename Computer::DType; //distance type
+        using TData = typename Computer::TData; //data type
+
+        std::map<int, bool> occured_words_map;
+        std::pair<DType, uint32_t> best_dist_idx(std::numeric_limits<uint32_t>::max(), 0); //minimum distance found
+        block_node_info* bn_info;
+        for (int cur_feature = 0; cur_feature < features.rows; cur_feature++) {
+            comp.startwithfeature(features.ptr<TData>(cur_feature));
+            //ensure feature is in a
+            Block c_block = getBlock(0);
+            //copy to another structure and add padding with zeros
+            do {
+                //given the current block, finds the node with minimum distance
+                best_dist_idx.first = std::numeric_limits<uint32_t>::max();
+                for (int cur_node = 0; cur_node < c_block.getN(); cur_node++) {
+                    DType d = comp.computeDist(c_block.getFeature<TData>(cur_node));
+                    if (d < best_dist_idx.first)
+                        best_dist_idx = std::make_pair(d, cur_node);
+                }
+                bn_info = c_block.getBlockNodeInfo(best_dist_idx.second);
+                //if the node is leaf get word id and weight,else go to its children
+                if (bn_info->isleaf()) { //if the node is leaf get word id and weight
+                    // for every feature that ends in a leaf, we set the bool of its ID to true.
+                    occured_words_map[bn_info->getId()] = true;
+                }
+                else
+                    setBlock(bn_info->getId(), c_block); //go to its children
+            } while (!bn_info->isleaf() && bn_info->getId() != 0);
+        }
+        return occured_words_map;
+    }
+
     template<typename Computer>
     void _transform2(const cv::Mat& features, uint32_t storeLevel, BoWVector& r1, BoWFeatVector& r2) {
         Computer comp;

@@ -32,17 +32,47 @@ inline int omp_get_max_threads(){return 1;}
 inline int omp_get_thread_num(){return 0;}
 #endif
 #include <iostream>
+#include <fstream>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/features2d/features2d.hpp>
 using namespace std;
 namespace fbow{
 
-void VocabularyCreator::create(fbow::Vocabulary &Voc, const  cv::Mat  &features, const std::string &desc_name, Params params)
+std::vector<cv::Mat> readFeaturesFromFile(const std::string filename, std::string desc_name) {
+    std::vector<cv::Mat> features;
+    std::ifstream ifile(filename, std::ios::binary);
+    if (!ifile.is_open()) {
+        std::cerr << "could not open the input file: " << filename << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    char _desc_name[20];
+    ifile.read(_desc_name, 20);
+    desc_name = _desc_name;
+
+    uint32_t size;
+    ifile.read((char*) &size, sizeof(size));
+    features.resize(size);
+    for (size_t i = 0; i < size; i++) {
+        uint32_t cols, rows, type;
+        ifile.read((char*)&cols, sizeof(cols));
+        ifile.read((char*)&rows, sizeof(rows));
+        ifile.read((char*)&type, sizeof(type));
+        features[i].create(rows, cols, type);
+        ifile.read((char*)features[i].ptr<uchar>(0), features[i].total() * features[i].elemSize());
+    }
+    return features;
+}
+
+void VocabularyCreator::create(fbow::Vocabulary &Voc, const  cv::Mat  &features, const std::string &desc_name, Params params, bool use_idf)
 {
     std::vector<cv::Mat> vfeatures(1);
     vfeatures[0]=features;
-    create(Voc,vfeatures,desc_name,params);
+    create(Voc,vfeatures,desc_name,params, use_idf);
 }
 
-void VocabularyCreator::create(fbow::Vocabulary &Voc, const std::vector<cv::Mat> &features, const string &desc_name, Params params){
+void VocabularyCreator::create(fbow::Vocabulary &Voc, const std::vector<cv::Mat> &features, const string &desc_name, Params params, bool use_idf){
     assert(features.size()>0);
     assert(features[0].cols>0);
     //select the funciton
@@ -57,7 +87,11 @@ void VocabularyCreator::create(fbow::Vocabulary &Voc, const std::vector<cv::Mat>
     if (_descType==CV_8UC1){
 //        if (_descNBytes==32)dist_func=distance_hamming_32bytes;
 //        else
+            if(params.dist==0){
             dist_func=distance_hamming_generic;
+            }else if(params.dist==1){
+            dist_func=distance_jaccard_generic;
+            }
     }
     else  dist_func=distance_float_generic;
     //create for later usage
@@ -94,7 +128,7 @@ void VocabularyCreator::create(fbow::Vocabulary &Voc, const std::vector<cv::Mat>
 //        std::cout<<n.first<<" ";std::cout<<std::endl;
 
     //now, transform the tree into a vocabulary
-    convertIntoVoc(Voc,desc_name);
+    convertIntoVoc(Voc,desc_name, features, use_idf);
 }
 
 void VocabularyCreator::thread_consumer(int idx){
@@ -356,7 +390,7 @@ cv::Mat VocabularyCreator::meanValue_float( const std::vector<uint32_t>  &indice
 }
 
 
-void VocabularyCreator::convertIntoVoc(Vocabulary &Voc,  std::string  desc_name){
+void VocabularyCreator::convertIntoVoc(Vocabulary &Voc,  std::string  desc_name, const std::vector<cv::Mat>& features, bool use_idf){
 
     //look for leafs and store
     //now, create the blocks
@@ -400,7 +434,64 @@ void VocabularyCreator::convertIntoVoc(Vocabulary &Voc,  std::string  desc_name)
             binfo.setLeaf(areAllChildrenLeaf);
         }
     }
+    if(use_idf){
+        std::cout << "Finished creating Vocabulary. Starting IDF weigth calculation." << std::endl;
+        // Voc is created but weights are only based on crispness until here. 
+        // to get the needed IDF involved, we need to adjust the weights based on number of occurences of each word in an image test set
+        std::map<int, int> words_number_of_occurances;
+        int number_of_images = features.size();
+
+        // transform IDF transforms the image and stores the amount of features in the image and features per word
+        //  we perform this for a set of X images and use the stored values to determine the two following parameters:
+        // For any "visual word", the Document Frequency (DF) is the number of images containing this "visual word" divided by the total number of images. The IDF is the inverse of this value.
+
+        for(auto f : features){
+            std::map<int, bool> feature_occured_map=Voc.transformIDF(f);
+            for (auto i : feature_occured_map){
+                if (!words_number_of_occurances.count(i.first)) {
+                // not found -> word has not occured yet and has to be added to the map
+                words_number_of_occurances.insert({i.first, 1});
+                } else {
+                // found -> word already in map: we increment the count
+                words_number_of_occurances[i.first]+=1;
+                }
+            } 
+        }
+
+        //-> go into each leaf and change the weight to IDF
+
+        float idf;
+        for(auto &node:TheTree.getNodes()){
+            if (!node.second.isLeaf()){
+                auto binfo=Voc.getBlock(nodeid_blockid[node.first]);
+                binfo.setN(node.second.children.size());
+                binfo.setParentId(node.first);
+                bool areAllChildrenLeaf=true;
+                for(size_t c=0;c< node.second.children.size();c++){
+                    Node &child=TheTree.getNodes()[node.second.children[c]];
+                    binfo.setFeature(c,child.feature);
+                    //go to the end and set info
+                    if (child.isLeaf()){
+                        // calculating IDF of the word
+                        idf = log((float)number_of_images/(float)words_number_of_occurances[child.feat_idx]);
+                        if(!words_number_of_occurances.count(child.feat_idx)){
+                            std::cout << "Word not in map" << std::endl;
+                            idf = log((float)number_of_images);
+                        }
+                        binfo.getBlockNodeInfo(c)->setLeaf(child.feat_idx, idf);
+                    }
+                    else {
+                        binfo.getBlockNodeInfo(c)->setNonLeaf(nodeid_blockid[child.id]);
+                        areAllChildrenLeaf=false;
+                    }
+                }
+                binfo.setLeaf(areAllChildrenLeaf);
+            }
+        }
+        std::cout << "Images: " << number_of_images << std::endl;
+    }
 }
+
 float VocabularyCreator::distance_hamming_generic(const cv::Mat &a, const cv::Mat &b){
     uint64_t ret=0;
     const uchar *pa = a.ptr<uchar>(); // a & b are actually CV_8U
@@ -423,17 +514,47 @@ float VocabularyCreator::distance_hamming_generic(const cv::Mat &a, const cv::Ma
     return ret;
 }
 
+float VocabularyCreator::distance_jaccard_generic(const cv::Mat &a, const cv::Mat &b){
+    float ret=0;
+    uint64_t un=0;
+    uint64_t inter=0;
+    const uchar *pa = a.ptr<uchar>(); // a & b are actually CV_8U
+    const uchar *pb = b.ptr<uchar>();
+    for(int i=0;i<a.cols;i++,pa++,pb++){
+        uchar u=(*pa)|(*pb);
+        uchar in=(*pa)&(*pb);
+#ifdef __GNUG__
+        un+=__builtin_popcount(u);//only in g++
+        inter+=__builtin_popcount(in);
+#else
+        ret+=(v& (1))!=0;
+        ret+=(v& (2))!=0;
+        ret+=(v& (4))!=0;
+        ret+=(v& (8))!=0;
+        ret+=(v& (16))!=0;
+        ret+=(v& (32))!=0;
+        ret+=(v& (64))!=0;
+        ret+=(v& (128))!=0;
+#endif
+    }
+    ret=1.0-((float)inter/(float)un);
+    return ret;
+}
+
 //for orb
 float VocabularyCreator::distance_hamming_32bytes(const cv::Mat &a, const cv::Mat &b){
+    std::cout << "HAMMING" << std::endl;
     const uint64_t *pa = a.ptr<uint64_t>(); // a & b are actually CV_8U
     const uint64_t *pb = b.ptr<uint64_t>();
     return uint64_popcnt(pa[0]^pb[0])+ uint64_popcnt(pa[1]^pb[1])+  uint64_popcnt(pa[2]^pb[2])+uint64_popcnt(pa[3]^pb[3]);
 }
 float VocabularyCreator::distance_float_generic(const cv::Mat &a, const cv::Mat &b){
+    std::cout << "FLOAT" << std::endl;
     double sqd = 0.;
     const float *a_ptr=a.ptr<float>(0);
     const float *b_ptr=b.ptr<float>(0);
     for(int i = 0; i < a.cols; i ++) sqd += (a_ptr[i  ] - b_ptr[i  ])*(a_ptr[i  ] - b_ptr[i  ]);
+    std::cout << sqd << std::endl;
     return sqd;
 }
 
