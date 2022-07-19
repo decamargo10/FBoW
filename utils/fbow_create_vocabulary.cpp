@@ -75,8 +75,6 @@ int main(int argc, char** argv) {
         std::string desc_name;
         auto features = readFeaturesFromFile(argv[1], desc_name);
 
-        std::cout << "descriptor name: " << desc_name << std::endl;
-
         fbow::VocabularyCreator::Params params;
         params.k = stoi(cml("-k", "10"));
         params.L = stoi(cml("-l", "6"));
@@ -100,12 +98,8 @@ int main(int argc, char** argv) {
         vocab_creator.create(vocab, features, desc_name, params, use_idf);
         auto t_end = std::chrono::high_resolution_clock::now();
 
-        std::cout << "time: " << (double)(std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count()) << "ms" << std::endl;
-        std::cout << "number of blocks: " << vocab.size() << std::endl;
         std::cout << "saving the vocabulary: " << argv[2] << std::endl;
-
         vocab.saveToFile(argv[2]);
-        std::cout << "DONE SAVING" << argv[2] << std::endl;
     } catch (std::exception& ex) {
         std::cerr << ex.what() << std::endl;
     }
