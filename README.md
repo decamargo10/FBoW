@@ -8,10 +8,12 @@ In loading a vocabulary, FBoW is about 80x faster than DBoW2.
 In transforming an image into Bag of Words using on machines with AVX instructions, it is about 6.4x faster.  
 
 ## Build
-
+Add and init pybind as submodule:
+cd FBoW
+git submodule add -b stable ../../pybind/pybind11 extern/pybind11
+git submodule update --init
 ```bash
-$ git clone https://github.com/shinsumicco/FBoW.git
-$ cd FBoW && mkdir build && cd build
+$ mkdir build && cd build
 $ cmake .. -DBUILD_TESTS=ON -DBUILD_UTILS=ON
 $ make
 ```
